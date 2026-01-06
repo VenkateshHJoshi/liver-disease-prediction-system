@@ -7,12 +7,10 @@ import joblib
 import numpy as np
 import plotly.graph_objects as go
 import warnings
-
 from sklearn import set_config
 
-# Keep pandas through pipeline
+# Keep pandas through pipeline (feature-name safety)
 set_config(transform_output="pandas")
-
 warnings.filterwarnings("ignore")
 
 # ============================================================
@@ -38,19 +36,21 @@ CLASS_MAP = {
 }
 
 # ============================================================
-# Default RAW clinical values (UI only)
+# Medical-grade UI configuration
 # ============================================================
-def get_default_value(feature):
-    f = feature.lower()
-    if "age" in f: return 45
-    if "bilirubin" in f: return 1.2
-    if "alkaline" in f: return 210
-    if "alanine" in f or "alamine" in f: return 35
-    if "aspartate" in f: return 40
-    if "protein" in f: return 6.8
-    if "albumin_and" in f: return 1.0
-    if "albumin" in f: return 3.5
-    return 1.0
+FEATURE_UI = {
+    "age": {"label": "Age (years)", "min": 1, "max": 100, "default": 32},
+    "albumin": {"label": "Albumin (g/dL)", "min": 1.5, "max": 6.0, "default": 4.5},
+    "alkaline phosphatase": {"label": "Alkaline Phosphatase (U/L)", "min": 40, "max": 400, "default": 95},
+    "alanine aminotransferase": {"label": "ALT – Alanine Aminotransferase (U/L)", "min": 5, "max": 300, "default": 22},
+    "aspartate aminotransferase": {"label": "AST – Aspartate Aminotransferase (U/L)", "min": 5, "max": 300, "default": 24},
+    "bilirubin": {"label": "Total Bilirubin (mg/dL)", "min": 0.1, "max": 10.0, "default": 0.8},
+    "cholinesterase": {"label": "Cholinesterase (U/L)", "min": 2000, "max": 12000, "default": 7000},
+    "cholesterol": {"label": "Cholesterol (mg/dL)", "min": 80, "max": 400, "default": 170},
+    "creatinina": {"label": "Creatinine (mg/dL)", "min": 0.3, "max": 5.0, "default": 0.9},
+    "gamma glutamyl transferase": {"label": "GGT – Gamma GT (U/L)", "min": 5, "max": 300, "default": 30},
+    "protein": {"label": "Total Protein (g/dL)", "min": 4.0, "max": 9.0, "default": 7.2},
+}
 
 # ============================================================
 # Page config
@@ -62,7 +62,7 @@ st.set_page_config(
 )
 
 st.title("🩺 Liver Health AI Dashboard")
-st.caption("Raw clinical data → ML pipeline → visual decision support")
+st.caption("Clinical inputs → ML pipeline → visual decision support")
 
 st.divider()
 
@@ -75,17 +75,27 @@ input_data = {}
 cols = st.columns(2)
 
 for i, feature in enumerate(feature_names):
+    key = feature.lower()
+
     with cols[i % 2]:
-        if feature.lower() in ["sex", "gender"]:
+
+        # Sex (human-friendly)
+        if key in ["sex", "gender"]:
             sex = st.selectbox("Sex", ["Male", "Female"])
             input_data[feature] = 1 if sex == "Male" else 0
+
+        # Numeric features
         else:
+            ui = FEATURE_UI.get(key, {})
             input_data[feature] = st.number_input(
-                feature.replace("_", " "),
-                value=float(get_default_value(feature))
+                label=ui.get("label", feature.replace("_", " ").title()),
+                min_value=ui.get("min", 0.0),
+                max_value=ui.get("max", 1000.0),
+                value=ui.get("default", 1.0),
+                help="Enter raw lab value (no transformation needed)"
             )
 
-# Enforce correct order & names
+# Preserve feature order
 input_df = pd.DataFrame([input_data], columns=feature_names)
 
 # ============================================================
@@ -123,100 +133,91 @@ if st.button("🔍 Analyze Liver Health"):
     # ========================================================
     # DASHBOARD (2 × 2)
     # ========================================================
-    with st.container():
+    col1, col2 = st.columns(2)
 
-        col1, col2 = st.columns(2)
+    # ---- Chart 1: Risk Gauge ----
+    with col1:
+        fig1 = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=confidence * 100,
+            number={"suffix": "%"},
+            title={"text": "Overall Risk Confidence"},
+            gauge={
+                "axis": {"range": [0, 100]},
+                "bar": {"color": risk_color},
+                "steps": [
+                    {"range": [0, 45], "color": "#b6f2c2"},
+                    {"range": [45, 75], "color": "#ffeaa7"},
+                    {"range": [75, 100], "color": "#fab1a0"},
+                ],
+            },
+        ))
+        st.plotly_chart(fig1, use_container_width=True)
 
-        # ---------------- Chart 1: Risk Gauge ----------------
-        with col1:
-            fig1 = go.Figure(go.Indicator(
-                mode="gauge+number",
-                value=confidence * 100,
-                number={"suffix": "%"},
-                title={"text": "Overall Risk Confidence"},
-                gauge={
-                    "axis": {"range": [0, 100]},
-                    "bar": {"color": risk_color},
-                    "steps": [
-                        {"range": [0, 45], "color": "#b6f2c2"},
-                        {"range": [45, 75], "color": "#ffeaa7"},
-                        {"range": [75, 100], "color": "#fab1a0"},
-                    ],
-                },
-            ))
-            st.plotly_chart(fig1, use_container_width=True)
+    # ---- Chart 2: Top-2 Probabilities ----
+    with col2:
+        top_idx = np.argsort(probs)[-2:][::-1]
+        fig2 = go.Figure(
+            data=[
+                go.Bar(
+                    x=[CLASS_MAP[i] for i in top_idx],
+                    y=probs[top_idx],
+                    marker_color=["#0984e3", "#6c5ce7"]
+                )
+            ]
+        )
+        fig2.update_layout(
+            title="Most Likely Conditions",
+            yaxis=dict(range=[0, 1], title="Probability"),
+        )
+        st.plotly_chart(fig2, use_container_width=True)
 
-        # ---------------- Chart 2: Top-2 Probabilities ----------------
-        with col2:
-            top_idx = np.argsort(probs)[-2:][::-1]
-            fig2 = go.Figure(
-                data=[
-                    go.Bar(
-                        x=[CLASS_MAP[i] for i in top_idx],
-                        y=probs[top_idx],
-                        marker_color=["#0984e3", "#6c5ce7"]
-                    )
-                ]
-            )
-            fig2.update_layout(
-                title="Most Likely Conditions",
-                yaxis=dict(range=[0, 1], title="Probability"),
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+    col3, col4 = st.columns(2)
 
-        col3, col4 = st.columns(2)
+    # ---- Chart 3: Feature Profile ----
+    with col3:
+        values = np.array([float(input_data[f]) for f in feature_names])
+        normalized = values / (np.mean(values) + 1e-6)
 
-        # ---------------- Chart 3: Feature Profile ----------------
-        with col3:
-            values = np.array([float(input_data[f]) for f in feature_names])
-            normalized = values / (np.mean(values) + 1e-6)
+        fig3 = go.Figure(
+            data=[go.Bar(x=list(range(len(normalized))), y=normalized)]
+        )
+        fig3.add_hline(y=1, line_dash="dash")
+        fig3.update_layout(
+            title="Overall Feature Profile (Relative Scale)",
+            xaxis_title="Feature Index",
+            yaxis_title="Relative Magnitude",
+        )
+        st.plotly_chart(fig3, use_container_width=True)
 
-            fig3 = go.Figure(
-                data=[
-                    go.Bar(
-                        x=list(range(len(normalized))),
-                        y=normalized,
-                        marker_color="#00b894"
-                    )
-                ]
-            )
-            fig3.add_hline(y=1, line_dash="dash", line_color="black")
-            fig3.update_layout(
-                title="Overall Feature Profile (Relative Scale)",
-                xaxis_title="Feature Index",
-                yaxis_title="Relative Magnitude",
-            )
-            st.plotly_chart(fig3, use_container_width=True)
+    # ---- Chart 4: Top Feature Deviations ----
+    with col4:
+        deviations = np.abs(normalized - 1.0)
+        top_k = np.argsort(deviations)[-5:][::-1]
 
-        # ---------------- Chart 4: Top Feature Deviations ----------------
-        with col4:
-            deviations = np.abs(normalized - 1.0)
-            top_k = np.argsort(deviations)[-5:][::-1]
-
-            fig4 = go.Figure(
-                data=[
-                    go.Bar(
-                        x=[feature_names[i].replace("_", " ") for i in top_k],
-                        y=deviations[top_k],
-                        marker_color="#d63031"
-                    )
-                ]
-            )
-            fig4.update_layout(
-                title="Top Influential Feature Deviations",
-                yaxis_title="Deviation Strength",
-            )
-            st.plotly_chart(fig4, use_container_width=True)
+        fig4 = go.Figure(
+            data=[
+                go.Bar(
+                    x=[feature_names[i].replace("_", " ") for i in top_k],
+                    y=deviations[top_k],
+                    marker_color="#d63031"
+                )
+            ]
+        )
+        fig4.update_layout(
+            title="Top Influential Feature Deviations",
+            yaxis_title="Deviation Strength",
+        )
+        st.plotly_chart(fig4, use_container_width=True)
 
     # ========================================================
     # AI INTERPRETATION
     # ========================================================
     st.subheader("💬 AI Interpretation")
-
     with st.chat_message("assistant"):
         st.write(
             f"The model predicts **{disease}** with **{confidence:.2%} confidence**. "
-            f"The risk level is **{risk.lower()}**, based on learned interactions across multiple features. "
+            f"The risk level is **{risk.lower()}**, based on learned interactions across multiple biomarkers. "
             "This enables early detection even when individual lab values appear normal."
         )
 
@@ -224,4 +225,4 @@ if st.button("🔍 Analyze Liver Health"):
 # FOOTER
 # ============================================================
 st.divider()
-st.caption("Pipeline-based ML • Plotly-powered visuals • Decision-support system")
+st.caption("Pipeline-based ML • Plotly visuals • Clinical decision-support tool")
