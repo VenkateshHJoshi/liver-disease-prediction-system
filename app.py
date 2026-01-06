@@ -24,7 +24,7 @@ pipeline = bundle["pipeline"]
 feature_names = bundle["feature_names"]
 
 # ============================================================
-# Class names (UNCHANGED – same as training)
+# Class labels (UNCHANGED)
 # ============================================================
 CLASS_MAP = {
     0: "Healthy Liver",
@@ -35,7 +35,7 @@ CLASS_MAP = {
 }
 
 # ============================================================
-# UI metadata for inputs
+# Input UI metadata
 # ============================================================
 FEATURE_UI = {
     "age": {"label": "Age (years)", "min": 1, "max": 100, "default": 32},
@@ -61,7 +61,7 @@ st.set_page_config(
 )
 
 st.title("🩺 Liver Disease Pattern Analysis System")
-st.caption("ML-based pattern similarity & risk leaning (not a diagnosis)")
+st.caption("Multiclass ML probability analysis (decision support, not diagnosis)")
 st.divider()
 
 # ============================================================
@@ -98,30 +98,33 @@ st.divider()
 if st.button("🔍 Analyze Pattern"):
 
     probs = pipeline.predict_proba(input_df)[0]
-    pred_class = int(np.argmax(probs))
-    confidence = float(probs[pred_class])
 
-    st.success(f"### 🧾 Primary Model Output: **{CLASS_MAP[pred_class]}**")
-    st.info(f"Model Confidence: **{confidence:.2%}**")
+    # Sort probabilities
+    class_probs = sorted(
+        [(CLASS_MAP[i], probs[i]) for i in range(len(probs))],
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    top_class, top_prob = class_probs[0]
+    second_class, second_prob = class_probs[1]
+
+    st.success(f"### 🧾 Primary Prediction: **{top_class}**")
+    st.info(
+        f"Top Probability: **{top_prob:.2%}**  \n"
+        f"Second Likely Pattern: **{second_class} ({second_prob:.2%})**"
+    )
 
     st.divider()
-    st.subheader("📊 Disease Pattern Leaning")
+    st.subheader("📊 Multi-Class Disease Pattern Analysis")
 
     # ========================================================
-    # 1️⃣ Disease Leaning Chart
+    # CHART 1 — FULL 5-CLASS DISTRIBUTION
     # ========================================================
-    focus = {
-        "Healthy Liver": 0,
-        "Cirrhosis": 1,
-        "Hepatitis": 2,
-        "Fibrosis": 3,
-        "Suspected Liver Disorder": 4,
-    }
+    labels = [c for c, _ in class_probs]
+    values = [p for _, p in class_probs]
 
-    labels = list(focus.keys())
-    values = [probs[focus[l]] for l in labels]
-
-    fig = go.Figure(
+    fig1 = go.Figure(
         data=[
             go.Bar(
                 x=labels,
@@ -137,69 +140,93 @@ if st.button("🔍 Analyze Pattern"):
         ]
     )
 
-    fig.update_layout(
-        title="Disease Pattern Similarity (Probability Distribution)",
+    fig1.update_layout(
+        title="Disease Pattern Similarity (All 5 Classes)",
         yaxis=dict(range=[0, 1], title="Probability"),
         xaxis_title="Disease Pattern",
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig1, use_container_width=True)
 
     # ========================================================
-    # 2️⃣ Lean Strength toward Fibrosis / Suspected
+    # CHART 2 — TOP-2 DOMINANCE
     # ========================================================
-    fibrosis_prob = probs[3]
-    suspected_prob = probs[4]
-    lean_strength = fibrosis_prob + suspected_prob
-
-    st.subheader("📌 Chronic Pattern Lean Strength")
-
-    st.metric(
-        label="Fibrosis + Suspected Similarity",
-        value=f"{lean_strength:.2%}"
+    fig2 = go.Figure(
+        data=[
+            go.Bar(
+                x=[top_class, second_class],
+                y=[top_prob, second_prob],
+                marker_color=["#6c5ce7", "#00cec9"]
+            )
+        ]
     )
 
+    fig2.update_layout(
+        title="Top-2 Class Dominance",
+        yaxis=dict(range=[0, 1], title="Probability"),
+    )
+
+    st.plotly_chart(fig2, use_container_width=True)
+
     # ========================================================
-    # 3️⃣ Recommendation Engine (Probability-based)
+    # CHART 3 — GROUPED PATTERN VIEW
     # ========================================================
-    st.subheader("🩺 Clinical Recommendation (Decision Support)")
+    healthy = probs[0]
+    acute = probs[1] + probs[2]      # Cirrhosis + Hepatitis
+    chronic = probs[3] + probs[4]    # Fibrosis + Suspected
+
+    fig3 = go.Figure(
+        data=[
+            go.Bar(
+                x=["Healthy Pattern", "Acute Pattern", "Chronic Pattern"],
+                y=[healthy, acute, chronic],
+                marker_color=["#2ecc71", "#e67e22", "#c0392b"]
+            )
+        ]
+    )
+
+    fig3.update_layout(
+        title="Grouped Disease Pattern Similarity",
+        yaxis=dict(range=[0, 1], title="Combined Probability"),
+    )
+
+    st.plotly_chart(fig3, use_container_width=True)
+
+    # ========================================================
+    # CLINICAL INTERPRETATION (CORRECT LOGIC)
+    # ========================================================
+    st.subheader("🩺 Clinical Interpretation (Decision Support)")
 
     with st.chat_message("assistant"):
 
-        if lean_strength >= 0.80:
+        if top_prob >= 0.80:
             st.write(
-                "🔴 **Strong leaning toward chronic liver disease patterns detected.**\n\n"
-                "The patient's biomarker profile closely resembles historical patterns "
-                "associated with **fibrosis or early chronic liver disorders**.\n\n"
-                "✅ **Recommendation:** Prompt clinical evaluation is advised, including "
-                "advanced liver assessment (e.g., FibroScan, imaging, specialist referral)."
+                f"🔴 **High confidence pattern detected: {top_class}.**\n\n"
+                f"The model shows strong alignment with historical cases labeled as "
+                f"**{top_class}**, with limited overlap from other classes.\n\n"
+                "✅ **Recommendation:** Prompt clinical evaluation aligned with this pattern is advised."
             )
 
-        elif lean_strength >= 0.50:
+        elif top_prob >= 0.50:
             st.write(
-                "🟠 **Moderate leaning toward fibrotic or suspected patterns.**\n\n"
-                "Some biomarkers show early deviations commonly seen in progressive liver conditions.\n\n"
-                "✅ **Recommendation:** Regular monitoring, repeat liver function tests, "
-                "and lifestyle risk assessment are recommended."
+                f"🟠 **Moderate confidence leaning toward {top_class}.**\n\n"
+                f"There is notable overlap with **{second_class}**, indicating uncertainty.\n\n"
+                "✅ **Recommendation:** Additional diagnostic testing and short-term follow-up are recommended."
             )
 
         else:
             st.write(
-                "🟢 **Low similarity to fibrotic or suspected disease patterns.**\n\n"
-                "The current biomarker profile does not strongly align with chronic liver disease patterns.\n\n"
-                "✅ **Recommendation:** Continue routine health check-ups and preventive care."
+                "🟡 **Diffuse probability distribution detected.**\n\n"
+                "The model does not strongly associate the patient with a single disease pattern.\n\n"
+                "✅ **Recommendation:** Continued monitoring and repeat testing if symptoms persist."
             )
 
-    # ========================================================
-    # Transparency note
-    # ========================================================
     st.caption(
-        "⚠️ This system performs statistical pattern analysis based on historical data. "
-        "It does not provide a medical diagnosis and should be used only as decision-support."
+        "⚠️ This system performs statistical pattern similarity analysis and does not provide a medical diagnosis."
     )
 
 # ============================================================
 # Footer
 # ============================================================
 st.divider()
-st.caption("LightGBM Pipeline • Probability-driven interpretation • Ethical ML design")
+st.caption("LightGBM pipeline • Multiclass probability interpretation • Ethical ML decision support")
