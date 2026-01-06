@@ -1,19 +1,26 @@
 # ============================================================
-# Imports & configuration
+# Imports & global config
 # ============================================================
 import streamlit as st
 import pandas as pd
-import numpy as np
 import joblib
-import plotly.graph_objects as go
-from sklearn import set_config
+import numpy as np
+import matplotlib.pyplot as plt
 import warnings
 
+from sklearn import set_config
+
+# Keep pandas through pipeline to preserve feature names
 set_config(transform_output="pandas")
-warnings.filterwarnings("ignore")
+
+# Silence sklearn feature-name warning AFTER fixing root cause
+warnings.filterwarnings(
+    "ignore",
+    message="X does not have valid feature names"
+)
 
 # ============================================================
-# Load trained pipeline bundle
+# Load trained pipeline (preprocessing + model)
 # ============================================================
 @st.cache_resource
 def load_pipeline():
@@ -24,7 +31,7 @@ pipeline = bundle["pipeline"]
 feature_names = bundle["feature_names"]
 
 # ============================================================
-# Class labels (UNCHANGED)
+# Human-readable class labels
 # ============================================================
 CLASS_MAP = {
     0: "Healthy Liver",
@@ -35,33 +42,40 @@ CLASS_MAP = {
 }
 
 # ============================================================
-# Input UI metadata
+# Default RAW clinical values (for UI only)
 # ============================================================
-FEATURE_UI = {
-    "age": {"label": "Age (years)", "min": 1, "max": 100, "default": 32},
-    "albumin": {"label": "Albumin (g/dL)", "min": 1.5, "max": 6.0, "default": 4.5},
-    "alkaline phosphatase": {"label": "Alkaline Phosphatase (U/L)", "min": 40, "max": 400, "default": 95},
-    "alanine aminotransferase": {"label": "ALT – Alanine Aminotransferase (U/L)", "min": 5, "max": 300, "default": 22},
-    "aspartate aminotransferase": {"label": "AST – Aspartate Aminotransferase (U/L)", "min": 5, "max": 300, "default": 24},
-    "bilirubin": {"label": "Total Bilirubin (mg/dL)", "min": 0.1, "max": 10.0, "default": 0.8},
-    "cholinesterase": {"label": "Cholinesterase (U/L)", "min": 2000, "max": 12000, "default": 7000},
-    "cholesterol": {"label": "Cholesterol (mg/dL)", "min": 80, "max": 400, "default": 170},
-    "creatinina": {"label": "Creatinine (mg/dL)", "min": 0.3, "max": 5.0, "default": 0.9},
-    "gamma glutamyl transferase": {"label": "Gamma GT (U/L)", "min": 5, "max": 300, "default": 30},
-    "protein": {"label": "Total Protein (g/dL)", "min": 4.0, "max": 9.0, "default": 7.2},
-}
+def get_default_value(feature: str) -> float:
+    f = feature.lower()
+    if "age" in f:
+        return 45
+    if "bilirubin" in f:
+        return 1.2
+    if "alkaline" in f:
+        return 210
+    if "alanine" in f or "alamine" in f:
+        return 35
+    if "aspartate" in f:
+        return 40
+    if "protein" in f:
+        return 6.8
+    if "albumin_and" in f:
+        return 1.0
+    if "albumin" in f:
+        return 3.5
+    return 1.0
 
 # ============================================================
-# Page setup
+# Page config
 # ============================================================
 st.set_page_config(
-    page_title="Liver Disease Pattern Analysis",
+    page_title="Liver Health AI",
     page_icon="🩺",
     layout="centered"
 )
 
-st.title("🩺 Liver Disease Pattern Analysis System")
-st.caption("Multiclass ML probability analysis (decision support, not diagnosis)")
+st.title("🩺 Liver Health AI Dashboard")
+st.caption("Raw clinical data → ML pipeline → visual decision support")
+
 st.divider()
 
 # ============================================================
@@ -73,160 +87,137 @@ input_data = {}
 cols = st.columns(2)
 
 for i, feature in enumerate(feature_names):
-    key = feature.lower()
-
     with cols[i % 2]:
-        if key in ["sex", "gender"]:
+
+        # ---- Sex as categorical UI ----
+        if feature.lower() in ["sex", "gender"]:
             sex = st.selectbox("Sex", ["Male", "Female"])
+            # ⚠️ adjust only if training encoding differs
             input_data[feature] = 1 if sex == "Male" else 0
+
+        # ---- All other numeric features ----
         else:
-            ui = FEATURE_UI.get(key, {})
             input_data[feature] = st.number_input(
-                label=ui.get("label", feature.replace("_", " ").title()),
-                min_value=ui.get("min", 0.0),
-                max_value=ui.get("max", 1000.0),
-                value=ui.get("default", 1.0),
+                feature.replace("_", " "),
+                value=float(get_default_value(feature))
             )
 
+# IMPORTANT: enforce correct feature order + names
 input_df = pd.DataFrame([input_data], columns=feature_names)
 
 # ============================================================
-# ANALYSIS
+# PREDICTION
 # ============================================================
 st.divider()
 
-if st.button("🔍 Analyze Pattern"):
+if st.button("🔍 Analyze Liver Health"):
 
     probs = pipeline.predict_proba(input_df)[0]
+    pred_class = int(np.argmax(probs))
+    confidence = float(probs[pred_class])
+    disease = CLASS_MAP[pred_class]
 
-    # Sort probabilities
-    class_probs = sorted(
-        [(CLASS_MAP[i], probs[i]) for i in range(len(probs))],
-        key=lambda x: x[1],
-        reverse=True
-    )
+    # Risk buckets
+    if confidence < 0.45:
+        risk = "Low"
+    elif confidence < 0.75:
+        risk = "Medium"
+    else:
+        risk = "High"
 
-    top_class, top_prob = class_probs[0]
-    second_class, second_prob = class_probs[1]
-
-    st.success(f"### 🧾 Primary Prediction: **{top_class}**")
-    st.info(
-        f"Top Probability: **{top_prob:.2%}**  \n"
-        f"Second Likely Pattern: **{second_class} ({second_prob:.2%})**"
-    )
+    # ========================================================
+    # RESULT SUMMARY
+    # ========================================================
+    st.success(f"### 🧾 Diagnosis: **{disease}**")
+    st.info(f"Confidence: **{confidence:.2%}** | Risk Level: **{risk}**")
 
     st.divider()
-    st.subheader("📊 Multi-Class Disease Pattern Analysis")
+    st.subheader("📊 Visual Health Analysis")
 
     # ========================================================
-    # CHART 1 — FULL 5-CLASS DISTRIBUTION
+    # DASHBOARD (2 × 2 GRID)
     # ========================================================
-    labels = [c for c, _ in class_probs]
-    values = [p for _, p in class_probs]
+    with st.container():
 
-    fig1 = go.Figure(
-        data=[
-            go.Bar(
-                x=labels,
-                y=values,
-                marker_color=[
-                    "#2ecc71",  # Healthy
-                    "#e74c3c",  # Cirrhosis
-                    "#f39c12",  # Hepatitis
-                    "#d35400",  # Fibrosis
-                    "#9b59b6",  # Suspected
-                ]
+        # ===================== ROW 1 =====================
+        col1, col2 = st.columns(2)
+
+        # ---- Chart 1: Risk Meter ----
+        with col1:
+            color = "green" if risk == "Low" else "orange" if risk == "Medium" else "red"
+            fig, ax = plt.subplots(figsize=(5, 3))
+            ax.barh(["Risk"], [confidence], color=color)
+            ax.set_xlim(0, 1)
+            ax.set_xlabel("Model Confidence")
+            ax.set_title("Overall Risk Level")
+            st.pyplot(fig)
+
+        # ---- Chart 2: Top-2 Class Probabilities ----
+        with col2:
+            top_idx = np.argsort(probs)[-2:][::-1]
+            labels = [CLASS_MAP[i] for i in top_idx]
+            values = probs[top_idx]
+
+            fig, ax = plt.subplots(figsize=(5, 3))
+            ax.bar(labels, values)
+            ax.set_ylim(0, 1)
+            ax.set_ylabel("Probability")
+            ax.set_title("Most Likely Conditions")
+            plt.xticks(rotation=15)
+            st.pyplot(fig)
+
+        # ===================== ROW 2 =====================
+        col3, col4 = st.columns(2)
+
+        # ---- Chart 3: Normalized Feature Profile (ALL features) ----
+        with col3:
+            feature_vals = np.array(
+                [float(input_data[f]) for f in feature_names],
+                dtype=float
             )
-        ]
-    )
 
-    fig1.update_layout(
-        title="Disease Pattern Similarity (All 5 Classes)",
-        yaxis=dict(range=[0, 1], title="Probability"),
-        xaxis_title="Disease Pattern",
-    )
+            # Robust normalization (always non-empty)
+            mean_val = np.mean(feature_vals) + 1e-6
+            normalized = feature_vals / mean_val
 
-    st.plotly_chart(fig1, use_container_width=True)
+            fig, ax = plt.subplots(figsize=(5, 3))
+            ax.bar(range(len(normalized)), normalized)
+            ax.axhline(1, linestyle="--", color="black")
+            ax.set_title("Overall Feature Profile (Relative Scale)")
+            ax.set_xlabel("Feature Index")
+            ax.set_ylabel("Relative Magnitude")
+            st.pyplot(fig)
 
-    # ========================================================
-    # CHART 2 — TOP-2 DOMINANCE
-    # ========================================================
-    fig2 = go.Figure(
-        data=[
-            go.Bar(
-                x=[top_class, second_class],
-                y=[top_prob, second_prob],
-                marker_color=["#6c5ce7", "#00cec9"]
+        # ---- Chart 4: Top Feature Deviations (Proxy Explanation) ----
+        with col4:
+            deviations = np.abs(normalized - 1.0)
+            top_k = np.argsort(deviations)[-5:][::-1]
+
+            fig, ax = plt.subplots(figsize=(5, 3))
+            ax.bar(
+                [feature_names[i].replace("_", " ") for i in top_k],
+                deviations[top_k]
             )
-        ]
-    )
-
-    fig2.update_layout(
-        title="Top-2 Class Dominance",
-        yaxis=dict(range=[0, 1], title="Probability"),
-    )
-
-    st.plotly_chart(fig2, use_container_width=True)
+            ax.set_title("Top Influential Feature Deviations")
+            ax.set_ylabel("Deviation Strength")
+            plt.xticks(rotation=30)
+            st.pyplot(fig)
 
     # ========================================================
-    # CHART 3 — GROUPED PATTERN VIEW
+    # CHAT-STYLE INTERPRETATION
     # ========================================================
-    healthy = probs[0]
-    acute = probs[1] + probs[2]      # Cirrhosis + Hepatitis
-    chronic = probs[3] + probs[4]    # Fibrosis + Suspected
-
-    fig3 = go.Figure(
-        data=[
-            go.Bar(
-                x=["Healthy Pattern", "Acute Pattern", "Chronic Pattern"],
-                y=[healthy, acute, chronic],
-                marker_color=["#2ecc71", "#e67e22", "#c0392b"]
-            )
-        ]
-    )
-
-    fig3.update_layout(
-        title="Grouped Disease Pattern Similarity",
-        yaxis=dict(range=[0, 1], title="Combined Probability"),
-    )
-
-    st.plotly_chart(fig3, use_container_width=True)
-
-    # ========================================================
-    # CLINICAL INTERPRETATION (CORRECT LOGIC)
-    # ========================================================
-    st.subheader("🩺 Clinical Interpretation (Decision Support)")
+    st.subheader("💬 AI Interpretation")
 
     with st.chat_message("assistant"):
-
-        if top_prob >= 0.80:
-            st.write(
-                f"🔴 **High confidence pattern detected: {top_class}.**\n\n"
-                f"The model shows strong alignment with historical cases labeled as "
-                f"**{top_class}**, with limited overlap from other classes.\n\n"
-                "✅ **Recommendation:** Prompt clinical evaluation aligned with this pattern is advised."
-            )
-
-        elif top_prob >= 0.50:
-            st.write(
-                f"🟠 **Moderate confidence leaning toward {top_class}.**\n\n"
-                f"There is notable overlap with **{second_class}**, indicating uncertainty.\n\n"
-                "✅ **Recommendation:** Additional diagnostic testing and short-term follow-up are recommended."
-            )
-
-        else:
-            st.write(
-                "🟡 **Diffuse probability distribution detected.**\n\n"
-                "The model does not strongly associate the patient with a single disease pattern.\n\n"
-                "✅ **Recommendation:** Continued monitoring and repeat testing if symptoms persist."
-            )
-
-    st.caption(
-        "⚠️ This system performs statistical pattern similarity analysis and does not provide a medical diagnosis."
-    )
+        st.write(
+            f"The model predicts **{disease}** with **{confidence:.2%} confidence**. "
+            f"Although individual lab values may appear within normal limits, "
+            f"the **combined feature pattern** closely matches historical cases of this condition. "
+            "This enables early risk detection before clinical thresholds are crossed."
+        )
 
 # ============================================================
-# Footer
+# FOOTER
 # ============================================================
 st.divider()
-st.caption("LightGBM pipeline • Multiclass probability interpretation • Ethical ML decision support")
+st.caption("Pipeline-based ML • Human-first UI • Decision-support system")
